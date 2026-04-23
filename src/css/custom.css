@@ -1,0 +1,36 @@
+/**
+ * Global theme shared across both CostOps and OtakuVerse docs.
+ * Per-project overrides can be added using the [data-docs-plugin-id] attribute
+ * that Docusaurus adds to the <html> element on docs pages.
+ */
+
+:root {
+  --ifm-color-primary: #2e6cdf;
+  --ifm-color-primary-dark: #2461c8;
+  --ifm-color-primary-darker: #225cbc;
+  --ifm-color-primary-darkest: #1c4c9b;
+  --ifm-color-primary-light: #4680e3;
+  --ifm-color-primary-lighter: #5389e5;
+  --ifm-color-primary-lightest: #7ba4eb;
+  --ifm-code-font-size: 95%;
+  --docusaurus-highlighted-code-line-bg: rgba(0, 0, 0, 0.1);
+}
+
+[data-theme='dark'] {
+  --ifm-color-primary: #7fb0ff;
+  --ifm-color-primary-dark: #5c9bff;
+  --ifm-color-primary-darker: #4a8fff;
+  --ifm-color-primary-darkest: #1a70ff;
+  --ifm-color-primary-light: #a2c5ff;
+  --ifm-color-primary-lighter: #b4d1ff;
+  --ifm-color-primary-lightest: #e6f0ff;
+  --docusaurus-highlighted-code-line-bg: rgba(0, 0, 0, 0.3);
+}
+
+/* Project-specific accent overrides */
+html[data-docs-plugin-id='otakuverse'] {
+  --ifm-color-primary: #b5179e;
+  --ifm-color-primary-dark: #a3158e;
+  --ifm-color-primary-darker: #991486;
+  --ifm-color-primary-darkest: #7e106e;
+}

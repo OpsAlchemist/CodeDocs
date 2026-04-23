@@ -1,0 +1,93 @@
+name: Build and Deploy Docusaurus Site
+
+on:
+  # Rebuild whenever the docs repo itself changes.
+  push:
+    branches: [main]
+  # Rebuild when CostOps or OtakuVerse dispatches an update.
+  repository_dispatch:
+    types: [update-docs]
+  # Allow manual runs from the Actions tab.
+  workflow_dispatch:
+
+# Allow only one deployment at a time, but let in-progress runs finish.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+jobs:
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout docs repo
+        uses: actions/checkout@v4
+
+      - name: Checkout CostOps
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository_owner }}/CostOps
+          path: temp/costops
+          token: ${{ secrets.DOCS_SYNC_TOKEN || secrets.GITHUB_TOKEN }}
+        continue-on-error: true
+
+      - name: Checkout OtakuVerse
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository_owner }}/OtakuVerse
+          path: temp/otakuverse
+          token: ${{ secrets.DOCS_SYNC_TOKEN || secrets.GITHUB_TOKEN }}
+        continue-on-error: true
+
+      - name: Sync project docs
+        run: |
+          set -euo pipefail
+          sync_project() {
+            local name="$1"
+            local src="temp/${name}/docs"
+            local dest="docs/${name}"
+            if [ -d "$src" ]; then
+              echo "Syncing ${name} docs from ${src} to ${dest}"
+              rm -rf "$dest"
+              mkdir -p "$dest"
+              cp -r "$src"/. "$dest"/
+            else
+              echo "::warning::No docs/ folder found for ${name}; keeping existing placeholder content."
+            fi
+          }
+          sync_project "costops"
+          sync_project "otakuverse"
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci || npm install
+
+      - name: Build site
+        run: npm run build
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: build
+
+  deploy:
+    name: Deploy
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
