@@ -40,9 +40,13 @@ rebuilt whenever either source project pushes to `main`.
 
 ## Local development
 
-> **Node 18, 20, or 22 required.** Node 23 has a webpack regression that breaks
-> the production build ([facebook/docusaurus#10684](https://github.com/facebook/docusaurus/issues/10684)).
-> An `.nvmrc` is included — run `nvm use` or install Node 20. CI runs on Node 20.
+> **Node 18, 20, or 22 required.** An `.nvmrc` is included — run `nvm use` or
+> install Node 20. CI runs on Node 20.
+>
+> `webpack` is pinned to `5.105.4` via `overrides` in `package.json` because
+> `5.106.0` tightened `ProgressPlugin` schema validation and breaks
+> `webpackbar@6` (the progress reporter Docusaurus ships). Remove the override
+> once `webpackbar` releases a compatible version.
 
 ```bash
 npm install
