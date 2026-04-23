@@ -1,16 +1,32 @@
 name: Build and Deploy Docusaurus Site
 
 on:
-  # Rebuild whenever the docs repo itself changes.
+  # Rebuild when the docs repo itself changes.
   push:
     branches: [main]
-  # Rebuild when CostOps or OtakuVerse dispatches an update.
-  repository_dispatch:
-    types: [update-docs]
+
+  # Poll the source repos on a schedule. Keeps this self-contained — no
+  # workflow files or secrets are required in CostOps / OtakuVerse.
+  schedule:
+    # Once a day at 06:00 UTC. Adjust as needed. Cron is UTC.
+    - cron: '0 6 * * *'
+
   # Allow manual runs from the Actions tab.
   workflow_dispatch:
+    inputs:
+      costops_ref:
+        description: 'CostOps ref to sync (branch, tag, or sha). Leave blank for default branch.'
+        required: false
+        default: ''
+      otakuverse_ref:
+        description: 'OtakuVerse ref to sync (branch, tag, or sha). Leave blank for default branch.'
+        required: false
+        default: ''
+      force:
+        description: 'Force rebuild even when source repos have not changed.'
+        required: false
+        default: 'false'
 
-# Allow only one deployment at a time, but let in-progress runs finish.
 concurrency:
   group: pages
   cancel-in-progress: false
@@ -20,9 +36,102 @@ permissions:
   pages: write
   id-token: write
 
+env:
+  # Override via repo variables (Settings -> Variables -> Actions) if the
+  # source repos live under a different owner or use different names.
+  COSTOPS_REPO: ${{ vars.COSTOPS_REPO || format('{0}/CostOps', github.repository_owner) }}
+  OTAKUVERSE_REPO: ${{ vars.OTAKUVERSE_REPO || format('{0}/OtakuVerse', github.repository_owner) }}
+
 jobs:
+  check:
+    name: Check for source changes
+    runs-on: ubuntu-latest
+    outputs:
+      should_build: ${{ steps.decide.outputs.should_build }}
+      costops_sha: ${{ steps.resolve.outputs.costops_sha }}
+      otakuverse_sha: ${{ steps.resolve.outputs.otakuverse_sha }}
+    steps:
+      - name: Resolve latest source SHAs
+        id: resolve
+        env:
+          GH_TOKEN: ${{ secrets.DOCS_SYNC_TOKEN }}
+          COSTOPS_REF: ${{ github.event.inputs.costops_ref }}
+          OTAKUVERSE_REF: ${{ github.event.inputs.otakuverse_ref }}
+        run: |
+          set -euo pipefail
+          if [ -z "${GH_TOKEN:-}" ]; then
+            echo "::error::DOCS_SYNC_TOKEN secret is not set. Add a fine-grained PAT with Contents:Read on CostOps and OtakuVerse."
+            exit 1
+          fi
+
+          resolve_sha() {
+            local repo="$1"
+            local ref="$2"
+            if [ -z "$ref" ]; then
+              # Resolve default branch, then its HEAD SHA.
+              ref=$(gh api "repos/${repo}" --jq '.default_branch')
+            fi
+            gh api "repos/${repo}/commits/${ref}" --jq '.sha'
+          }
+
+          costops_sha=$(resolve_sha "${{ env.COSTOPS_REPO }}" "${COSTOPS_REF}")
+          otakuverse_sha=$(resolve_sha "${{ env.OTAKUVERSE_REPO }}" "${OTAKUVERSE_REF}")
+
+          echo "costops_sha=${costops_sha}" >> "$GITHUB_OUTPUT"
+          echo "otakuverse_sha=${otakuverse_sha}" >> "$GITHUB_OUTPUT"
+          echo "CostOps @ ${costops_sha}"
+          echo "OtakuVerse @ ${otakuverse_sha}"
+
+      - name: Restore last-synced SHAs cache
+        id: cache-shas
+        uses: actions/cache@v4
+        with:
+          path: .last-synced-shas
+          key: last-synced-shas-${{ steps.resolve.outputs.costops_sha }}-${{ steps.resolve.outputs.otakuverse_sha }}
+          restore-keys: |
+            last-synced-shas-
+
+      - name: Decide whether to build
+        id: decide
+        env:
+          FORCE: ${{ github.event.inputs.force }}
+          EVENT: ${{ github.event_name }}
+          COSTOPS_SHA: ${{ steps.resolve.outputs.costops_sha }}
+          OTAKUVERSE_SHA: ${{ steps.resolve.outputs.otakuverse_sha }}
+        run: |
+          set -euo pipefail
+          should_build="false"
+          reason=""
+
+          if [ "$EVENT" = "push" ] || [ "$EVENT" = "workflow_dispatch" ]; then
+            if [ "$FORCE" != "false" ] || [ "$EVENT" = "push" ]; then
+              should_build="true"
+              reason="event=${EVENT} (force build)"
+            fi
+          fi
+
+          if [ "$should_build" != "true" ]; then
+            if [ -f .last-synced-shas/shas.env ]; then
+              source .last-synced-shas/shas.env
+              if [ "${LAST_COSTOPS_SHA:-}" != "$COSTOPS_SHA" ] || [ "${LAST_OTAKUVERSE_SHA:-}" != "$OTAKUVERSE_SHA" ]; then
+                should_build="true"
+                reason="source sha changed (costops ${LAST_COSTOPS_SHA:-none} -> ${COSTOPS_SHA}, otakuverse ${LAST_OTAKUVERSE_SHA:-none} -> ${OTAKUVERSE_SHA})"
+              else
+                reason="source shas unchanged"
+              fi
+            else
+              should_build="true"
+              reason="no previous sync recorded"
+            fi
+          fi
+
+          echo "should_build=${should_build}" >> "$GITHUB_OUTPUT"
+          echo "Build decision: ${should_build} (${reason})"
+
   build:
     name: Build
+    needs: check
+    if: needs.check.outputs.should_build == 'true'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout docs repo
@@ -31,37 +140,42 @@ jobs:
       - name: Checkout CostOps
         uses: actions/checkout@v4
         with:
-          repository: ${{ github.repository_owner }}/CostOps
+          repository: ${{ env.COSTOPS_REPO }}
           path: temp/costops
-          token: ${{ secrets.DOCS_SYNC_TOKEN || secrets.GITHUB_TOKEN }}
-        continue-on-error: true
+          ref: ${{ needs.check.outputs.costops_sha }}
+          token: ${{ secrets.DOCS_SYNC_TOKEN }}
+          fetch-depth: 1
 
       - name: Checkout OtakuVerse
         uses: actions/checkout@v4
         with:
-          repository: ${{ github.repository_owner }}/OtakuVerse
+          repository: ${{ env.OTAKUVERSE_REPO }}
           path: temp/otakuverse
-          token: ${{ secrets.DOCS_SYNC_TOKEN || secrets.GITHUB_TOKEN }}
-        continue-on-error: true
+          ref: ${{ needs.check.outputs.otakuverse_sha }}
+          token: ${{ secrets.DOCS_SYNC_TOKEN }}
+          fetch-depth: 1
 
       - name: Sync project docs
         run: |
           set -euo pipefail
           sync_project() {
             local name="$1"
+            local repo="$2"
             local src="temp/${name}/docs"
             local dest="docs/${name}"
-            if [ -d "$src" ]; then
-              echo "Syncing ${name} docs from ${src} to ${dest}"
-              rm -rf "$dest"
-              mkdir -p "$dest"
-              cp -r "$src"/. "$dest"/
-            else
-              echo "::warning::No docs/ folder found for ${name}; keeping existing placeholder content."
+
+            if [ ! -d "$src" ]; then
+              echo "::warning::${repo} has no docs/ folder. Keeping placeholder content for ${name}."
+              return
             fi
+
+            echo "Syncing ${name} docs from ${repo} (${src} -> ${dest})"
+            rm -rf "$dest"
+            mkdir -p "$dest"
+            cp -r "$src"/. "$dest"/
           }
-          sync_project "costops"
-          sync_project "otakuverse"
+          sync_project "costops" "${{ env.COSTOPS_REPO }}"
+          sync_project "otakuverse" "${{ env.OTAKUVERSE_REPO }}"
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -74,6 +188,20 @@ jobs:
 
       - name: Build site
         run: npm run build
+
+      - name: Record synced SHAs
+        run: |
+          mkdir -p .last-synced-shas
+          {
+            echo "LAST_COSTOPS_SHA=${{ needs.check.outputs.costops_sha }}"
+            echo "LAST_OTAKUVERSE_SHA=${{ needs.check.outputs.otakuverse_sha }}"
+          } > .last-synced-shas/shas.env
+
+      - name: Save synced SHAs to cache
+        uses: actions/cache/save@v4
+        with:
+          path: .last-synced-shas
+          key: last-synced-shas-${{ needs.check.outputs.costops_sha }}-${{ needs.check.outputs.otakuverse_sha }}
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3

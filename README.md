@@ -7,8 +7,9 @@ Each project gets its own docs instance, sidebar, and URL namespace:
 - `/costops/*` → sourced from `CostOps/docs/`
 - `/otakuverse/*` → sourced from `OtakuVerse/docs/`
 
-The site is built from this repo, published to GitHub Pages, and automatically
-rebuilt whenever either source project pushes to `main`.
+The site is built from this repo and published to GitHub Pages. A scheduled
+job polls both source repos and rebuilds whenever either one changes — no
+workflows or secrets are required inside `CostOps` / `OtakuVerse`.
 
 ## Repository layout
 
@@ -34,8 +35,7 @@ rebuilt whenever either source project pushes to `main`.
 ├── tsconfig.json
 ├── package.json
 └── .github/
-    ├── workflows/deploy-docs.yml        # Build + deploy this site
-    └── workflow-templates/docs-update.yml  # Drop into source repos to trigger
+    └── workflows/deploy-docs.yml   # Build + deploy, polls source repos
 ```
 
 ## Local development
@@ -72,49 +72,71 @@ and `baseUrl` to `/`, then drop a `CNAME` file into `static/`.
 3. Register a new `@docusaurus/plugin-content-docs` entry in
    `docusaurus.config.ts` with its own `id`, `path`, and `routeBasePath`.
 4. Add a navbar `docSidebar` item pointing at the new plugin id.
-5. In the source repo, copy `.github/workflow-templates/docs-update.yml` into
-   `.github/workflows/` and add a matching `actions/checkout` + sync step in
-   `deploy-docs.yml`.
+5. In `.github/workflows/deploy-docs.yml`, add a `NEWPROJECT_REPO` env entry,
+   a `Checkout <NewProject>` step, and a `sync_project "<newproject>" ...`
+   line inside the sync step. Also extend the `resolve_sha` calls and cache
+   key in the `check` job so the scheduled poll detects changes.
 
 ## Auto-deploy flow
 
 ```
-CostOps push ─┐
-              ├─► repository_dispatch (update-docs) ─► CodeDocs build ─► gh-pages
-OtakuVerse push ─┘
+                                       ┌── CostOps (docs/)     ◄── polled
+schedule / push / manual ─► CodeDocs ─►│
+                                       └── OtakuVerse (docs/)  ◄── polled
+                                                 │
+                                                 ▼
+                                            gh-pages
 ```
+
+The `check` job resolves the latest SHA on each source repo's default branch
+and compares it to the last-synced SHA stored in the Actions cache. The build
+only runs when something changed, so scheduled runs are cheap when nothing is
+new. Pushes to `CodeDocs` `main` always rebuild.
 
 ### One-time setup
 
-1. **This repo (`CodeDocs`)**
-   - Settings → Pages → *Source*: **GitHub Actions**.
-   - The workflow uses the built-in `GITHUB_TOKEN`; no extra secret required if
-     the source repos are public. For private source repos, create a
-     fine-grained PAT with `contents: read` on both source repos and save it
-     as the `DOCS_SYNC_TOKEN` secret.
+All of this happens in the **`CodeDocs`** repo only. The source repos need no
+changes.
 
-2. **CostOps and OtakuVerse repos**
-   - Copy `.github/workflow-templates/docs-update.yml` from this repo into
-     `.github/workflows/docs-update.yml`.
-   - Create a PAT with `contents: write` on this docs repo and save it as the
-     `DOCS_DISPATCH_TOKEN` secret in each source repo.
+1. **Enable GitHub Pages**
+   - Settings → Pages → *Source*: **GitHub Actions**.
+
+2. **Create a fine-grained PAT for reading the source repos**
+   - https://github.com/settings/personal-access-tokens/new
+   - **Resource owner**: `OpsAlchemist` (or whoever owns the source repos)
+   - **Repository access**: *Only select repositories* → pick **CostOps** and
+     **OtakuVerse**
+   - **Repository permissions → Contents**: *Read-only*
+   - Copy the generated token.
+   - If the owner is an org with PAT approval enabled, an org admin approves
+     it at *Org settings → Personal access tokens → Pending requests*.
+
+3. **Save the token as a secret in `CodeDocs`**
+   - Settings → Secrets and variables → Actions → *New repository secret*
+   - Name: **`DOCS_SYNC_TOKEN`**
+   - Value: the PAT from step 2.
+
+4. *(Optional)* **Override the repo locations** if CostOps / OtakuVerse live
+   under a different owner or name.
+   - Settings → Secrets and variables → Actions → *Variables* tab
+   - Add `COSTOPS_REPO` = `actualOwner/CostOps`
+   - Add `OTAKUVERSE_REPO` = `actualOwner/OtakuVerse`
+
+5. **Adjust the poll cadence** in `.github/workflows/deploy-docs.yml`
+   (`schedule.cron`). Default is every 30 minutes.
 
 ### Manual trigger
 
-You can force a rebuild from the Actions tab (*Build and Deploy Docusaurus
-Site* → **Run workflow**), or via the API:
-
-```bash
-gh api repos/<org>/CodeDocs/dispatches \
-  -f event_type=update-docs
-```
+From the Actions tab: *Build and Deploy Docusaurus Site* → **Run workflow**.
+Optional inputs let you pin a specific ref per project or force a rebuild when
+nothing has changed.
 
 ## Content conventions for source repos
 
-Both `CostOps` and `OtakuVerse` should keep their documentation under a
-top-level `docs/` directory. The layout is copied verbatim into this site, so
-the sidebar structure defined in `sidebars/<project>.ts` must match the folder
-names used in each source repo.
+Both `CostOps` and `OtakuVerse` need a top-level `docs/` directory. Its
+contents are copied verbatim into this site, so the sidebar structure defined
+in `sidebars/<project>.ts` must match the folder names used in each source
+repo.
 
 Suggested structure:
 
