@@ -113,7 +113,7 @@ changes.
 
 3. **Save the token as a secret in `CodeDocs`**
    - Settings → Secrets and variables → Actions → *New repository secret*
-   - Name: **`DOCS_SYNC_TOKEN`**
+   - Name: **`DOCS_DISPATCH_TOKEN`**
    - Value: the PAT from step 2.
 
 4. *(Optional)* **Override the repo locations** if CostOps / OtakuVerse live
