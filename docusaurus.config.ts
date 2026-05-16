@@ -22,10 +22,12 @@ const config: Config = {
 
   onBrokenLinks: 'warn',
   markdown: {
+    mermaid: true,
     hooks: {
       onBrokenMarkdownLinks: 'warn',
     },
   },
+  themes: ['@docusaurus/theme-mermaid'],
 
   i18n: {
     defaultLocale: 'en',
@@ -78,6 +80,9 @@ const config: Config = {
     colorMode: {
       defaultMode: 'light',
       respectPrefersColorScheme: true,
+    },
+    mermaid: {
+      theme: { light: 'neutral', dark: 'dark' },
     },
     navbar: {
       title: 'CodeDocs',
